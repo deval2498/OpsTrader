@@ -1,0 +1,2 @@
+# OpsTrader
+Opinios trading platform
