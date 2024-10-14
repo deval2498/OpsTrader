@@ -1,0 +1,13 @@
+# Ignore all .env files, including Next.js specific ones
+**/.env
+**/.env.local
+**/.env.development
+**/.env.production
+
+# Ignore all node_modules directories
+**/node_modules/
+
+# Ignore Next.js build output in any folder
+**/.next/
+
+**/build
