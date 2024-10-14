@@ -10,4 +10,4 @@
 # Ignore Next.js build output in any folder
 **/.next/
 
-**/build
+**/dist
