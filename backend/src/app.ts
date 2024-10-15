@@ -468,7 +468,7 @@ app.post('/onramp/inr', (req: Request, res: Response) => {
             throw new NotFoundError(`${userId} not found`)
         }
         users[userId]["amount"] =  amount
-        res.status(201).json({
+        res.status(200).json({
             message: `Onramped ${userId} with amount ${amount}`
         }) 
     } catch (error) {
@@ -514,12 +514,13 @@ app.post('/trade/mint', (req: Request, res: Response) => {
         if(!(stockSymbol in symbols)) {
             throw new NotFoundError(`${stockSymbol} not found`)
         }
-        const curUserBalance = users[userId]["amount"]
-        const remainder = price*quantity*2 - curUserBalance
+        const curUserBalance = users[userId].amount
+        const remainder = curUserBalance - price*quantity*2
         if(remainder < 0) {
             throw new NotEnoughBalance(`${userId} needs ${Math.abs(remainder)} more`)
         }
-        mintStocksToUser(quantity, userId, stockSymbol) // 
+        mintStocksToUser(quantity, userId, stockSymbol)
+        users[userId].amount -= price*quantity*2
         addMintedStocksToSymbol(quantity, stockSymbol)
         res.status(200).json({
             message: `Minted ${quantity} 'yes' and 'no' tokens for user ${userId}, remaining balance is ${remainder}`
@@ -602,7 +603,8 @@ app.post('/order/buy', (req: Request, res: Response) => {
     if(remainder < 0) {
         throw new NotEnoughBalance(`${userId} needs ${Math.abs(remainder)} more to place this order`)
     }
-    user.locked = quantity*price
+    user.amount -= quantity*price
+    user.locked += quantity*price
     const order: Order = {
         stockSymbol: stockSymbol,
         type: stockType,
@@ -633,8 +635,11 @@ app.get('/balances/inr', (req: Request, res: Response) => {
             locked: users[key].locked
         }
     }
+    console.log(responseBody, "For my test")
     res.status(200).json(responseBody)
 })
+
+export default app
 
 app.listen(port, () => {
     console.log(`Server is listening on port ${port}`)
