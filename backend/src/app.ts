@@ -1,643 +1,417 @@
-import express, { Request, Response } from "express"
+import express, { Request, response, Response } from "express"
 import config from './config'
-import { count } from "console";
 
 const app = express()
 
 const port = config.PORT
 
-class NotFoundError extends Error {
-    constructor(message: string) {
-        super(message);  // Call the parent class (Error) constructor with the message
-        this.name = "NotFoundError";  // Set the name property to "NotFoundError"
-    }
-}
 
-class NotEnoughBalance extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = "NotEnoughBalance"
-    }
-}
-
-type User = {
-    amount: number,
-    locked: number,
-    portfolio: Map<string, UserSymbol>,
-    orders: Order[]
-}
-
-type UserSymbol = {
-    yes: {
-        amount: number,
-        locked: number
-    },
-    no: {
-        amount: number,
-        locked: number
-    }
-}
-
-type Symbol = {
+interface User {
+    balance: number;
+    locked: number;
+  }
+  
+  interface StockBalance {
+    yes: { quantity: number; locked: number };
+    no: { quantity: number; locked: number };
+  }
+  
+  interface Symbol {
     yes: number,
-    no: number,
-}
+    no: number
+  }
 
-type OnrampUserRequestBody = {
-    userId: string;
-    amount: number;
-}
-
-type MintRequestBody = {
-    userId: string,
-    stockSymbol: string,
-    price: number,
-    quantity: number
-}
-
-type OrderTradeRequest = {
+  type OrderTradeRequest = {
     userId: string,
     stockSymbol: string,
     price: number,
     quantity: number,
     stockType: 'yes' | 'no'
 }
-
-type Order = {
-    stockSymbol: string,
-    type: 'yes' | 'no',
-    createdAt: Date,
-    quantity: number,
-    fulfilled: number,
-    userId: string,
-    price: number,
-    orderType: 'buy' | 'sell'
-}
-
-type UserOrder = {
-    [userId: string]: number; // Maps userId to order quantity
+  
+  let users: Record<string, User> = {};
+  let stockBalances: Record<string, Record<string, StockBalance>> = {};
+  let symbols: Record<string, Symbol> = {};
+  let orders: Record<string, Record<string, {[key: number]: { total: number; orders: Record<string, ["normal"|"reverse", number, number]>}}>> = {};
+  
+  const reset = () => {
+    users = {};
+    stockBalances = {};
+    symbols = {};
+    orders = {};
   };
   
-type PriceLevel = {
-    price: number; // Add the price explicitly here for sorting purposes
-    total: number;
-    orders: UserOrder;
-  };
-  
-type OrderCategory = {
-    yes: PriceLevel[]; // Array of PriceLevel, which will be sorted by price
-    no: PriceLevel[];
-  };
-  
-type OrderBook = {
-    [stockSymbol: string]: OrderCategory;
-  };
-
-const users: { [key: string]: User } = {};
-
-const symbols: {[key: string]: Symbol} = {};
-
-const sellOrderBook: OrderBook = {}
-
-const buyOrderBook: OrderBook = {}
-
-
-function mintStocksToUser(quantity: number, userId: string, stockSymbol: string) {
-    const user = users[userId]
-    if(!user) {
-        throw new NotFoundError(`${userId} not found`)
-    }
-    user.portfolio.set(stockSymbol, {
-        yes: {
-            amount: quantity,
-            locked: 0
-        },
-        no: {
-            amount: quantity,
-            locked: 0
+  function checkReverseForSelling(stockSymbol: string, stockType: "yes" | "no", quantity: number, price: number):[boolean, string] {
+    try {
+      for (const user in orders[stockSymbol][stockType][price].orders) {
+        if(orders[stockSymbol][stockType][price].orders[user][0] == "reverse") {
+          return [true, user]
         }
-    })
-    return
-}
+      }
+      return [false, "none"]
+    } catch (error) {
+      return [false, "none"]
+    }
+    
+    
+  }
 
-function addMintedStocksToSymbol(quantity: number, stockSymbol: string) {
-    const symbol = symbols[stockSymbol]
-    if(!symbol) {
-        throw new NotFoundError(`${stockSymbol} not found`)
-    }
-    symbol.yes = quantity
-    symbol.no = quantity
-    return
-}
+  function createSellOrder(userId: string, stockSymbol: string, stockType: "yes" | "no", quantity: number, price: number, orderType: "normal" | "reverse") {
+        console.log("creating reverse", orderType)
+        if(orderType == "reverse") {
+          orders[stockSymbol][stockType][2000 - price] = orders[stockSymbol][stockType][2000 - price] || { total: 0, orders: {} };
+          orders[stockSymbol][stockType][2000 - price].total += quantity;
+          const orderArray = orders[stockSymbol][stockType][2000 - price].orders[userId] = orders[stockSymbol][stockType][2000 - price].orders[userId] || []
+          orderArray[0] = orderType
+          orderArray[1] = quantity
+          orderArray[2] = 0
+          users[userId].balance -= quantity * price
+          users[userId].locked += quantity * price
+          return "sell order placed"
+        }
+        if (stockBalances[userId][stockSymbol][stockType].quantity < quantity)
+        {
+            return "insufficient stock balance"
+        }
 
-function lockStocksToSell(userId: string, quantity: number, stockSymbol: string, stockType: 'yes' | 'no'): boolean {
-    const user = users[userId]
-    const symbol = symbols[stockSymbol]
-    if(!user) {
-        throw new NotFoundError(`${userId} not found`)
-    }
-    if(!symbol) {
-        throw new NotFoundError(`${stockSymbol} not found`)
-    }
-    const curStockHoldings = user.portfolio.get(stockSymbol)
-    if(!curStockHoldings) {
-        throw new NotFoundError(`${userId} does not have ${stockSymbol} in portfolio`)
-    }
-    const curUserBalance = curStockHoldings[stockType]
-    if(!curUserBalance || curUserBalance.amount < quantity) {
-        throw new NotEnoughBalance(`${userId} does not have enough ${stockSymbol} of ${stockType} in portfolio`)
-    }
-    const updatedUserbalance = {
-        amount: curUserBalance.amount - quantity,
-        locked: curUserBalance.locked + quantity
-    }
-    curStockHoldings[stockType] = updatedUserbalance
-    return true
-}
-
-function returnMoneyToSeller(amount: number, userId: string, price: number, stockSymbol: string, stockType: "yes" | "no") {
-    const amountToAdd = amount * price
-    const user = users[userId]
-    user.amount = user.amount + amountToAdd
-    const userPortfolio = user.portfolio.get(stockSymbol)
-    if(!userPortfolio) {
-        throw new NotFoundError(`${userId} does not have proper portfolio`)
-    }
-    userPortfolio[stockType].locked = userPortfolio[stockType].locked - amount
-}
-
-function giveStocksToBuyers(stockSymbol: string, stockType: "yes" | "no", amount: number, price: number, userId: string) {
-    const amountToReduce = amount*price
-    const user = users[userId]
-    user.locked = user.locked - amountToReduce
-    user.amount = user.amount + user.locked
-    const userPortfolio = user.portfolio.get(stockSymbol)
-    if(!userPortfolio) {
-        user.portfolio.set(stockSymbol, {
+        const reverseExists = checkReverseForSelling(stockSymbol, stockType == "yes" ? "no" : "yes", quantity, 2000 - price)
+        console.log(reverseExists)
+        // check if reverse exists if yes then execute
+        if(reverseExists && reverseExists[0] === true) {
+          delete orders[stockSymbol][stockType == "yes" ? "no" : "yes"][2000 - price]
+          users[userId].balance += quantity*price
+          stockBalances[userId][stockSymbol][stockType].quantity -= quantity
+          stockBalances[reverseExists[1]][stockSymbol] = stockBalances[reverseExists[1]][stockSymbol] || {
             yes: {
-                amount: stockType == "yes" ? amount : 0,
-                locked: 0
+              quantity: 0,
+              locked: 0
             },
             no: {
-                amount: stockType == "no" ? amount : 0,
-                locked: 0
+              quantity: 0,
+              locked: 0
             }
-        })
-        return
-    }
-    if(stockType == "yes") {
-        userPortfolio.yes.amount = userPortfolio.yes.amount + amount
-    }
-    else {
-        userPortfolio.no.amount = userPortfolio.no.amount + amount
-    }
-    return
-}
-
-function fillOrders(stockSymbol: string, stockType: 'yes' | 'no', quantity: number,price: number, orderBook: OrderBook, bookType: 'buy' | 'sell'): number{
-    const orders = orderBook[stockSymbol][stockType]
-    if(!orders) {
-        return quantity
-    }
-    if(bookType == 'sell') {
-        // check minimum selling price for buy order
-        let minPrice = orders[0].price
-        let curQty = quantity
-        let counter = 0
-        if(minPrice <= price) {
-            while(minPrice && minPrice <= price && curQty > 0){
-                console.log("We reached here", orders)
-                if(curQty == orders[counter].total) {
-                    // order matched return money to sellers from order book and delete order
-                    for (const key in orders[counter].orders) {
-                        const sellerAmount = orders[counter].orders[key]
-                        returnMoneyToSeller(sellerAmount, key, minPrice, stockSymbol, stockType)
-                    }
-                    orders.splice(counter, 1)
-                    return 0
-                }
-                else if(curQty < orders[counter].total) {
-                    // less buy orders, no partial buy order to be created, return money to some users, update total in sellbook
-                    for (const key in orders[counter].orders) {
-                        const sellerAmount = orders[counter].orders[key]
-                        if(curQty >= sellerAmount) {
-                            returnMoneyToSeller(sellerAmount, key, minPrice, stockSymbol, stockType)
-                            delete orders[counter].orders.key
-                            curQty = curQty - sellerAmount
-                            orders[counter].total = orders[counter].total - sellerAmount
-                        }
-                        else {
-                            // update partial user order since curQty < sellerAmount
-                            returnMoneyToSeller(curQty, key, minPrice, stockSymbol, stockType)
-                            orders[counter].orders[key] = orders[counter].orders[key] - curQty
-                            curQty = 0
-                            orders[counter].total = orders[counter].total - curQty
-                        }
-                        if(curQty == 0) {
-                            return curQty
-                        }
-                    }
-                }
-                else {
-                    // less sell orders, create partial buy order, return money to all sellers, remove sell order
-                    for (const key in orders[counter].orders) {
-                        const sellerAmount = orders[counter].orders[key]
-                        returnMoneyToSeller(sellerAmount, key, minPrice, stockSymbol, stockType)
-                        curQty = curQty - sellerAmount
-                        orders[counter].total = orders[counter].total - sellerAmount
-                        if(orders[counter].total == 0) {
-                            break
-                        } 
-                    }
-                    orders.splice(counter, 1)
-                    minPrice = orders[0].price
-                }
-
-            }
-            return curQty
-        }
-        return curQty
-    }
-    else {
-        // check maximum buying price for sell order
-        let maxPrice = orders[0].price
-        let curQty = quantity
-        let counter = 0
-        if(price <= maxPrice) {
-            while(maxPrice && price <= maxPrice && curQty > 0) {
-                if(curQty == orders[counter].total) {
-                    // order matched return money to the 'seller' and delete order and give stocks to buyers
-                    for(const key in orders[counter].orders) {
-                        const buyerAmount = orders[counter].orders[key]
-                        giveStocksToBuyers(stockSymbol, stockType, buyerAmount, price, key)
-                        // return money to seller pending
-                    }
-                    return 0
-                }
-                else if(curQty < orders[counter].total) {
-                    // less sell orders, no partial sell order to be created, give stocks to some users
-                    for (const key in orders[counter].orders) {
-                        const buyerAmount = orders[counter].orders[key]
-                        if(curQty >= buyerAmount) {
-                            giveStocksToBuyers(stockSymbol, stockType, buyerAmount, price, key)
-                            // delete orders[counter].orders.key  not a good idea to change obj while iterating
-                            curQty = curQty - buyerAmount
-                            orders[counter].total = orders[counter].total - buyerAmount
-                        }
-                        else {
-                            // update partial user buy order since curQty < buyeramount
-                            giveStocksToBuyers(stockSymbol, stockType, curQty, price, key)
-                            orders[counter].orders[key] = orders[counter].orders[key] - curQty
-                            orders[counter].total = orders[counter].total - curQty
-                            curQty = 0
-                        }
-                        if(curQty == 0) {
-                            return curQty
-                        }
-                    }
-                }
-                else {
-                    // less buy orders, create partial sell order, give stocks to all buyers, remove buy order
-                    for (const key in orders[counter].orders) {
-                        const buyerAmount = orders[counter].orders[key]
-                        giveStocksToBuyers(stockSymbol, stockType, buyerAmount, price, key)
-                        curQty = curQty - buyerAmount
-                        orders[counter].total = orders[counter].total - buyerAmount
-                        
-                    }
-                    orders.splice(0, 1)
-                }
-                maxPrice = orders[0].price
-            }
-            return curQty
-        }
-        return curQty
-
-    }
-
-}
-
-function swapExecution(userId: string, stockSymbol: string, quantity: number, price: number, stockType: 'yes' | 'no', action: "buy" | "sell"): number {
-    // check sell orders
-    console.log("Initiating swap if exists")
-    if(action == "buy") {
-        if(sellOrderBook[stockSymbol]) {
-            const pendingQuantity = fillOrders(stockSymbol, stockType, quantity, price, sellOrderBook, "sell")
-            return pendingQuantity
-        }
-        return quantity
-        // create buy order and lock the amount
-    }
-    // check buy orders
-    else {
-        if(buyOrderBook[stockSymbol]) {
-            const pendingQuantity = fillOrders(stockSymbol, stockType, quantity, price, buyOrderBook, "buy")
-            return pendingQuantity
-        }
-        return quantity
-        // create sell order and lock the stock
-    }
-}
-
-function createSellOrder(userId: string, stockSymbol: string, stockType: "yes" | "no", quantity: number, price: number) {
-    const user = users[userId]
-    if(!user) {
-        throw new NotFoundError(`${userId} not found`)
-    }
-    const sellOrder = sellOrderBook[stockSymbol]
-    if(!sellOrder) {
-        const priceOrder: PriceLevel = {
-            price: price,
-            total: quantity,
-            orders: {
-                [userId] : quantity
-            }
-        }
-        sellOrderBook[stockSymbol] = {
-            yes: stockType == 'yes' ? [priceOrder]: [],
-            no: stockType == "no" ? [priceOrder]: []
-        }
-    }
-    else {
-        const sellersArray = sellOrder[stockType]
-        const findPrice = sellersArray.findIndex(item => item.price == price)
-        if(findPrice) {
-            sellersArray[findPrice].orders[userId] = quantity
-            sellersArray[findPrice].total += quantity 
-        }
-        sellersArray.push({
-            price: price,
-            total: quantity,
-            orders: {
-                [userId]: quantity
-            }
-        })
-        // sort in ascending order
-        sellersArray.sort((a,b) => a.price - b.price)
-    }
-}
-
-function createBuyOrder(userId: string, stockSymbol: string, stockType: "yes" | "no", quantity: number, price: number) {
-    // not locking amount here for user
-    const user = users[userId]
-    if(!user) {
-        throw new NotFoundError(`${userId} not found`)
-    }
-    const buyOrder = buyOrderBook[stockSymbol]
-    if(!buyOrder) {
-        const priceOrder: PriceLevel = {
-            price: price,
-            total: quantity,
-            orders: {
-                userId: quantity
-            }
-        }
-        buyOrderBook[stockSymbol] = {
-            yes: stockType == 'yes' ? [priceOrder]: [],
-            no: stockType == "no" ? [priceOrder]: []
-        }
-    }
-    else {
-        const buyersArray = buyOrder[stockType]
-        const findPrice = buyersArray.findIndex((item) => item.price == price)
-        if(findPrice) {
-            buyersArray[findPrice].orders[userId] = quantity
-            buyersArray[findPrice].total = buyersArray[findPrice].total + quantity
-        }
-        else {
-            buyersArray.push(
-                {
-                    price: price,
-                    total: quantity,
-                    orders: {
-                        userId: quantity
-                    }
-                }
-            )
-            // sort in descending order
-            buyersArray.sort((a,b) => b.price - a.price)
-        }
-    }
-
-}
-
-function initiateSellOrder(userId: string, stockSymbol: string, quantity:number , price:number, stockType: 'yes' | 'no'): {orderPlaced: number, orderExecuted: number} {
-    // Execute buy orders if buy price is more than sell and execute at sellers price, locking should be done here?
-    const pendingQuantity = swapExecution(userId, stockSymbol, quantity, price, stockType, 'sell')
-    createSellOrder(userId, stockSymbol, stockType, pendingQuantity, price)
-    return {orderPlaced: pendingQuantity, orderExecuted: quantity - pendingQuantity}
-}
-
-function initiateBuyOrder(userId: string, stockSymbol: string, quantity:number , price:number, stockType: 'yes' | 'no'): {orderPlaced: number, orderExecuted: number} {
-    // Execute buy orders if buy price is more than sell and execute at sellers price, locking should be done here?
-    const pendingQuantity = swapExecution(userId, stockSymbol, quantity, price, stockType, 'buy')
-    createBuyOrder(userId, stockSymbol, stockType, pendingQuantity, price)
-    return {orderPlaced: pendingQuantity, orderExecuted: quantity - pendingQuantity}
-}
-
-app.use(express.json())
-
-app.get('/', (req: Request, res: Response) => {
-    res.send("Server is healthy")
-})
-
-app.post('/user/create/:id', (req: Request, res: Response) => {
-    try {
-        const userId = req.params.id
-        users[userId] = {
-            amount: 0,
-            locked: 0,
-            portfolio: new Map(),
-            orders: new Array()
-        }
-        res.status(201).json({
-            message: `User ${userId} created`
-        })
-    } catch (error) {
-        res.status(500).json({
-            error: true,
-            message: "Internal Server Error"
-        })
-    }
-})
-
-app.post('/onramp/inr', (req: Request, res: Response) => {
-    try {
-        const {userId, amount}: OnrampUserRequestBody = req.body
-        if(!(userId in users)) {
-            throw new NotFoundError(`${userId} not found`)
-        }
-        users[userId]["amount"] =  amount
-        res.status(200).json({
-            message: `Onramped ${userId} with amount ${amount}`
-        }) 
-    } catch (error) {
-        if(error instanceof NotFoundError) {
-            res.status(404).json({
-                message: error.message
-            })
-        }
-        else {
-            res.status(500).json({
-                error: true,
-                message: "Internal Server Error"
-            })
-        }
-    }
-
-})
-
-app.post('/symbol/create/:id', (req: Request, res: Response) => {
-    try {
-        const name = req.params.id
-        symbols[name] = {
-            yes: 0,
-            no: 0
-        }
-        res.status(201).json({
-            message: `Symbol ${name} created`
-        })
-    } catch (error) {
-        console.log(error)
-        res.status(500).json({
-            message: "Internal Server Error"
-        })
-    }
-})
-
-app.post('/trade/mint', (req: Request, res: Response) => {
-    try {
-        const {userId, stockSymbol, price, quantity}: MintRequestBody = req.body
-        if(!(userId in users)) {
-            throw new NotFoundError(`${userId} not found`)
-        }
-        if(!(stockSymbol in symbols)) {
-            throw new NotFoundError(`${stockSymbol} not found`)
-        }
-        const curUserBalance = users[userId].amount
-        const remainder = curUserBalance - price*quantity*2
-        if(remainder < 0) {
-            throw new NotEnoughBalance(`${userId} needs ${Math.abs(remainder)} more`)
-        }
-        mintStocksToUser(quantity, userId, stockSymbol)
-        users[userId].amount -= price*quantity*2
-        addMintedStocksToSymbol(quantity, stockSymbol)
-        res.status(200).json({
-            message: `Minted ${quantity} 'yes' and 'no' tokens for user ${userId}, remaining balance is ${remainder}`
-        })
-    } catch (error) {
-        console.log(error)
-        if(error instanceof NotFoundError || error instanceof NotEnoughBalance){
-            res.status(404).json(
-                {message: error.message}
-            )
-        }
-        else {
-            res.status(500).json({
-                message: "Internal Server Error"
-            })
-        }
-    }
-})
-// type Order = {
-//     stockSymbol: string,
-//     type: 'yes' | 'no',
-//     createdAt: Date,
-//     quantity: number,
-//     fulfilled: number,
-//     userId: string,
-// }
-app.post('/order/sell', (req: Request, res:Response) => {
-    try {
-        const {userId, stockSymbol, quantity, price, stockType}: OrderTradeRequest = req.body
-        const user = users[userId]
-        if(!(userId in users)) {
-            throw new NotFoundError(`${userId} not found`)
-        }
-        if(!(stockSymbol in symbols)) {
-            throw new NotFoundError(`${stockSymbol} not found`)
-        }
-        const userStockBalance = user.portfolio.get(stockSymbol)
-        if(!userStockBalance) {
-            throw new NotFoundError(`${stockSymbol} not found in ${userId} portfolio`)
-        }
-        const stocksLocked = lockStocksToSell(userId, quantity, stockSymbol, stockType)
-        if(stocksLocked) {
-            const {orderPlaced, orderExecuted} = initiateSellOrder(userId, stockSymbol, quantity, price, stockType) // first check if there are any buyer then add remaining to order book
-            userStockBalance[stockType].locked -= orderExecuted
-            if(orderPlaced == 0) {
-                res.status(200).json({
-                    message: `Sell order placed and trade executed`
-                })
-            }
-            else if(orderPlaced == quantity) {
-                res.status(200).json({
-                    message: `Sell order placed for ${orderPlaced} '${stockType}' options at price ${price}.`
-                })
-            }
-        }
-        else {
-            res.status(404).json({
-                message: `Unable to place sell order`
-            })
+          }
+          stockBalances[reverseExists[1]][stockSymbol][stockType].quantity += quantity
+          users[reverseExists[1]].locked -= quantity*price
+          return `Sell order matched at price ${price}`
         }
         
+        stockBalances[userId][stockSymbol][stockType].locked += quantity;
+        stockBalances[userId][stockSymbol][stockType].quantity -= quantity
+        orders[stockSymbol][stockType][price] = orders[stockSymbol][stockType][price] || { total: 0, orders: {} };
+        orders[stockSymbol][stockType][price].total += quantity;
+        const orderArray = orders[stockSymbol][stockType][price].orders[userId] = orders[stockSymbol][stockType][price].orders[userId] || []
+        orderArray[0] = orderType
+        orderArray[1] = quantity
+        orderArray[2] = 0
+
+
+        return "sell order placed"
+  }
+
+  function executeBuyOrder(userId: string, stockSymbol: string, stockType: "yes" | "no", quantity: number, price: number) {
+    // match quantities for best price
+        var qtyFilled = 0
+        const sortedSellPrices = Object.keys(orders[stockSymbol][stockType]).map(Number).sort((a, b) => a - b)
+        if(sortedSellPrices[0] <= price) {
+            // buy possible quantities, create reverse order for remaining if needed
+            var counter = 0
+            while (counter < sortedSellPrices.length && sortedSellPrices[counter] <= price ) {
+                const curPriceOrders = orders[stockSymbol][stockType][sortedSellPrices[counter]].orders
+                for(const user in curPriceOrders) {
+                    const curOrderQty = curPriceOrders[user][1] - curPriceOrders[user][2]
+                    // exchange stocks
+
+                    if(curOrderQty >= quantity - qtyFilled) {
+                        const qtyToFill = quantity - qtyFilled
+                        
+                        // reduce stocks
+                        stockBalances[user][stockSymbol][stockType].locked -= qtyToFill
+                        // return money, take money
+                        users[user].balance += qtyToFill*sortedSellPrices[counter]
+                        // add stocks
+                        stockBalances[userId][stockSymbol] = stockBalances[userId][stockSymbol] || {
+                            yes: {
+                                quantity: 0,
+                                locked: 0
+                            },
+                            no: {
+                                quantity: 0,
+                                locked: 0
+                            }
+                        }
+                        stockBalances[userId][stockSymbol][stockType].quantity += qtyToFill
+                        curPriceOrders[user][2] += qtyToFill
+                        orders[stockSymbol][stockType][sortedSellPrices[counter]].total -= qtyToFill
+                        // deduct money of buyer
+                        users[userId].balance -= qtyToFill*sortedSellPrices[counter]
+                        if(qtyToFill == quantity && sortedSellPrices[counter] < price) {
+                          return `Buy order matched at best price ${sortedSellPrices[counter]}`
+                        }
+                        else if (qtyToFill == quantity && curOrderQty > quantity - qtyFilled) {
+                          return `Buy order matched partially, ${curOrderQty - qtyToFill} remaining`
+                        }
+                        else if (qtyToFill == quantity) {
+                          return `Buy order placed and trade executed`
+                        }
+                    }
+                    else {
+                      const qtyToFill = curOrderQty
+                      // reduce stocks
+                      stockBalances[user][stockSymbol][stockType].locked -= qtyFilled
+                      // return money
+                      users[user].balance += qtyToFill*sortedSellPrices[counter]
+                      // add stocks
+                      stockBalances[user][stockSymbol] = stockBalances[user][stockSymbol] || {
+                          yes: {
+                              quantity: 0,
+                              locked: 0
+                          },
+                          no: {
+                              quantity: 0,
+                              locked: 0
+                          }
+                      }
+                      stockBalances[user][stockSymbol][stockType].quantity += qtyToFill
+                      curPriceOrders[user][2] += qtyToFill
+                      orders[stockSymbol][stockType][sortedSellPrices[counter]].total -= qtyToFill
+                      users[userId].balance -= qtyToFill*sortedSellPrices[counter]
+                      continue
+                    }
+                    // give money to seller 
+                }
+                counter += 1
+            }
+        }
+    // create a reverse order if no corresponding sell orders
+    const sellOrderStatus = createSellOrder(userId, stockSymbol, stockType == "yes" ? "no": "yes", quantity - qtyFilled, price, "reverse")
+    if(sellOrderStatus == "sell order placed") {
+      return "Buy order placed and pending"
+    }
+  }
+
+
+  function checkReverseOrder(userId: string, stockSymbol: string, stockType: "yes" | "no", quantity: number): [boolean | undefined, number] {
+    try {
+      const orderToRemove = []
+      for(const price in orders[stockSymbol][stockType]) {
+        console.log("prices", price)
+        for(const user in orders[stockSymbol][stockType][price].orders) {
+          if(user == userId && orders[stockSymbol][stockType][price].orders[user][0] == "reverse" && orders[stockSymbol][stockType][price].orders[user][1] == quantity) {
+            // Order found, need to remove order
+            return [true, parseInt(price)]
+          }
+        }
+      }
+      return [false, 0]
     } catch (error) {
-        console.log(error)
-        res.status(500).json({
-            message: "Internal Server Error",
-        })
+      console.log(error)
+      return [undefined, 0]
     }
-})
+  }
 
-app.post('/order/buy', (req: Request, res: Response) => {
-    const {userId, stockSymbol, quantity, price, stockType}: OrderTradeRequest = req.body
-    const user = users[userId]
-    if(!(userId in users)) {
-        throw new NotFoundError(`${userId} not found`)
-    }
-    if(!(stockSymbol in symbols)) {
-        throw new NotFoundError(`${stockSymbol} not found`)
-    }
-    const remainder = user.amount - quantity*price
-    if(remainder < 0) {
-        throw new NotEnoughBalance(`${userId} needs ${Math.abs(remainder)} more to place this order`)
-    }
-    user.amount -= quantity*price
-    user.locked += quantity*price
-    const order: Order = {
-        stockSymbol: stockSymbol,
-        type: stockType,
-        createdAt: new Date(),
-        quantity: quantity,
-        price: price,
-        fulfilled: 0,
-        userId: userId,
-        orderType: 'buy'
-    }
-    const {orderPlaced, orderExecuted} = initiateBuyOrder(userId, stockSymbol, quantity, price, stockType)
-    user.locked -= orderExecuted*price
-    if(orderPlaced == 0) {
-        res.status(200).json({
-            message: `Buy order placed and trade executed`
-        })
-    }
+  // Reset route
 
+  app.use(express.json());
+
+  app.post('/reset', (req: Request, res: Response) => {
+    reset();
+    res.status(200).json({ message: 'Data reset' });
+  });
+
+  app.post('/user/create/:userId', (req: Request, res: Response): any => {
+    const { userId } = req.params;
+    if (users[userId]) {
+      return res.status(400).json({ message: `User ${userId} already exists` });
+    }
+    users[userId] = { balance: 0, locked: 0 };
+    stockBalances[userId] = {}
+    res.status(201).json({ message: `User ${userId} created` });
+  });
+
+
+  // Onramp route to add balance
+app.post('/onramp/inr', (req: Request, res: Response):any => {
+    const { userId, amount } = req.body;
+    if (!users[userId]) return res.status(404).json({ message: `User ${userId} not found` });
+    
+    users[userId].balance += amount
+    return res.status(200).json({ message: `Onramped ${userId} with amount ${amount}` });
+  });
+  
+  // Create symbol route
+  app.post('/symbol/create/:symbol', (req: Request, res: Response):any => {
+    const { symbol } = req.params;
+    if (symbols[symbol]) {
+      return res.status(400).json({ message: `Symbol ${symbol} already exists` });
+    }
+    symbols[symbol] = { yes: 0, no: 0 };
+    orders[symbol] = { "yes": {}, "no": {} };
+    return res.status(201).json({ message: `Symbol ${symbol} created` });
+  });
+
+
+  // Mint tokens
+app.post('/trade/mint', (req: Request, res: Response):any => {
+    const { userId, stockSymbol, quantity } = req.body;
+    if (!users[userId]) return res.status(404).json({ message: `User ${userId} not found` });
+    if (!symbols[stockSymbol]) return res.status(404).json({ message: `Symbol ${stockSymbol} not found` });
+    if (users[userId].balance < quantity*10) return res.status(500).json({message: `Insufficient INR balance`})
     
 
+    users[userId].balance -= quantity*10
+    stockBalances[userId] = stockBalances[userId] || {};
+    stockBalances[userId][stockSymbol] = stockBalances[userId][stockSymbol] || { yes: { quantity: 0, locked: 0 }, no: { quantity: 0, locked: 0 } };
+    
+    
+    stockBalances[userId][stockSymbol].yes.quantity += quantity;
+    stockBalances[userId][stockSymbol].no.quantity += quantity;
+    symbols[stockSymbol].yes += quantity;
+    symbols[stockSymbol].no += quantity;
+  
+    res.status(200).json({
+      message: `Minted ${quantity} 'yes' and 'no' tokens for user ${userId}, remaining balance is ${users[userId].balance}`,
+    });
+  });
+
+app.post('/order/sell', (req: Request, res: Response):any => {
+        const { userId, stockSymbol, quantity, price, stockType }: OrderTradeRequest = req.body;
+        if (!users[userId])
+            {
+                return res.status(404).json({ message: `User ${userId} not found` });
+            } 
+        if (!symbols[stockSymbol]) 
+            {
+                return res.status(404).json({ message: `Symbol ${stockSymbol} not found` });
+            }
+        const orderStatus = createSellOrder(userId, stockSymbol, stockType, quantity, price, "normal")
+        if(orderStatus == "insufficient stock balance") {
+            return res.status(400).json({
+                message: "Insufficient stock balance"
+            })
+        }
+        if(orderStatus == `Sell order matched at price ${price}`) {
+          return res.status(200).json({message: orderStatus})
+        }
+        res.status(200).json({
+          message: `Sell order placed for ${quantity} '${stockType}' options at price ${price}.`,
+        });
 })
 
-app.get('/balances/inr', (req: Request, res: Response) => {
-    const responseBody: {[key: string]: {balance: number, locked: number}} = {}
-    for(const key in users) {
-        responseBody[key] = {
-            balance: users[key].amount,
-            locked: users[key].locked
-        }
+app.post('/order/buy', (req: Request, res: Response):any => {
+    try {
+        const { userId, stockSymbol, quantity, price, stockType }: OrderTradeRequest = req.body;
+        
+    if (!users[userId]) return res.status(404).json({ message: `User ${userId} not found` });
+    if (!symbols[stockSymbol]) return res.status(404).json({ message: `Symbol ${stockSymbol} not found` });
+
+    // check for reverse order
+    const reverseOrderStatus = checkReverseOrder(userId, stockSymbol, stockType == "yes"? "no": "yes", quantity)
+    console.log(reverseOrderStatus, "checking")
+    if (reverseOrderStatus[0] === true) {
+      // remove reverse order
+      users[userId].balance += (2000 - reverseOrderStatus[1])*quantity
+      users[userId].locked -= (2000 - reverseOrderStatus[1])*quantity
+      delete orders[stockSymbol][stockType == "yes" ? "no" : "yes"][reverseOrderStatus[1]].orders[userId]
+      const message = executeBuyOrder(userId, stockSymbol, stockType, quantity, price)
+      console.log(message, "reverse order")
+      if(message !== `Buy order placed and pending`) {
+
+        return res.status(200).json({
+          message: `Buy order matched at price ${price}`
+        })
+      }
     }
-    console.log(responseBody, "For my test")
-    res.status(200).json(responseBody)
-})
+
+    const totalCost = quantity * price;
+    if (users[userId].balance < totalCost) {
+      return res.status(400).json({ message: 'Insufficient INR balance' });
+    }
+    const message = executeBuyOrder(userId, stockSymbol, stockType, quantity, price)
+    return res.status(200).json({message: message})
+    } catch (error) {
+        console.log(error)
+        return res.status(500).json({
+            message: "something went wrong"
+        })
+    }
+    
+  });
+
+
+  app.get("/balances/inr", (req, res) => {
+    res.status(200).json(users)
+  })
+
+  app.get("/balances/stock", (req, res) => {
+    res.status(200).json(stockBalances)
+  })
+
+  app.get("/orderbook", (req, res) => {
+    try {
+      const responseBody: {
+        [stockSymbol: string] : {
+          [stockType: string]: {
+            [price: number] : {
+              total: number,
+              orders: {
+                [userId: string]: number 
+              }
+            }
+          }
+        }
+      } = {}
+      for(const stockSymbol in orders) {
+        responseBody[stockSymbol] = {
+          yes: {
+  
+          },
+          no: {
+  
+          }
+        }
+        for(const stockType in orders[stockSymbol]) {
+          for(const price in orders[stockSymbol][stockType]) {
+              for(const user in orders[stockSymbol][stockType][price].orders) {
+                if(orders[stockSymbol][stockType][price].total == 0) {
+                  continue
+                }
+                responseBody[stockSymbol][stockType][price] = responseBody[stockSymbol][stockType][price] || {
+                  total: 0,
+                  orders: {
+
+                  }
+                }
+                responseBody[stockSymbol][stockType][price].total = orders[stockSymbol][stockType][price].total
+                responseBody[stockSymbol][stockType][price].orders[user] = orders[stockSymbol][stockType][price].orders[user][1] - orders[stockSymbol][stockType][price].orders[user][2]
+              }
+            }
+          }
+        }
+      res.status(200).json(responseBody)
+    } catch (error) {
+      console.log(error)
+      return
+    }
+    
+    
+  })
+
+  app.post("/order/cancel", (req, res) => {
+    const { userId, stockSymbol, quantity, price, stockType }: OrderTradeRequest = req.body;
+    const order = orders[stockSymbol][stockType][price]
+    orders[stockSymbol][stockType][price].total -= quantity
+    orders[stockSymbol][stockType][price].orders[userId][1] -= quantity
+    if(orders[stockSymbol][stockType][price].total == 0) {
+      delete orders[stockSymbol][stockType][price]
+    }
+    stockBalances[userId][stockSymbol][stockType].locked -= quantity
+    stockBalances[userId][stockSymbol][stockType].quantity += quantity
+
+    res.status(200).json({
+        message: "Sell order canceled"
+    })
+  })
 
 export default app
 
