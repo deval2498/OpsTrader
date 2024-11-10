@@ -1,0 +1,26 @@
+{
+  "users": {
+    "user5": {
+      "balance": 250000,
+      "locked": 0
+    },
+    "user6": {
+      "balance": 0,
+      "locked": 0
+    }
+  },
+  "stockBalances": {
+    "user5": {},
+    "user6": {}
+  },
+  "orders": {
+    "undefined": {
+      "yes": {},
+      "no": {}
+    },
+    "AAPL_USD_25_Oct_2024_14_00": {
+      "yes": {},
+      "no": {}
+    }
+  }
+}

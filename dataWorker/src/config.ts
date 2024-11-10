@@ -21,7 +21,7 @@ const getEnvVariable = (key: keyof EnvConfig, defaultValue: string): string => {
 
 const config: EnvConfig = {
     PORT: parseInt(getEnvVariable('PORT', '5000')),
-    REDIS_HOST: getEnvVariable('REDIS_HOST', "127.0.0.1"),
+    REDIS_HOST: getEnvVariable('REDIS_HOST', "redis"),
     REDIS_PORT: getEnvVariable('REDIS_PORT', "6379"),
     REDIS_PASSWORD: getEnvVariable('REDIS_PASSWORD', "undefined")
 }

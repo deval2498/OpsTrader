@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+
+  redis:
+    image: redis:6-alpine
+    ports: 
+      - "6379:6379"
+    volumes:
+      - redis_data:/data  
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5001:5001"
+    env_file:
+      - ./backend/.env.development
+    depends_on:
+      redis:
+        condition: service_healthy
+    
+
+  worker:
+    build: 
+      context: ./dataWorker
+      dockerfile: Dockerfile
+    env_file:
+      - ./dataWorker/.env.development
+    depends_on:
+      redis:
+        condition: service_healthy
+volumes:
+  redis_data:

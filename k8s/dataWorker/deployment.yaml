@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataworker-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dataworker
+  template:
+    metadata:
+      labels:
+        app: dataworker
+    spec:
+      containers:
+      - name: backend
+        image: deval2498/dataworker:latest
+        imagePullPolicy: Always
+        env:
+          - name: PORT
+            value: "5001"
+          - name: REDIS_HOST
+            value: "redis-service"
+          - name: REDIS_PORT
+            value: "6379"
+          - name: REDIS_PASSWORD
+            value: "undefined"
+        
