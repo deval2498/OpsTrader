@@ -1,8 +1,9 @@
 "use client"
 import Card from "@/components/card";
+import CreateMarketModal from "@/components/createMarketModal";
 import CreateUserModal from "@/components/createUserModal";
 import MarketModal from "@/components/marketModal";
-import MintTokenModal from "@/components/mintTokenModal";
+import MintMoneyModal from "@/components/mintTokenModal";
 import { useState } from "react";
 
 export default function MarketsPage() {
@@ -11,8 +12,7 @@ export default function MarketsPage() {
         { id: 2, title: 'Card 2', description: 'This is the second card.' },
         { id: 3, title: 'Card 3', description: 'This is the third card.' },
       ];
-    const [marketModal, setMarketModal] = useState(false)
-    const [loginModal, setLoginModal] = useState(true)
+    const [marketModal] = useState(false)
     return (
         <div className="text-white pt-[53px]">
             Available Markets
@@ -23,7 +23,8 @@ export default function MarketsPage() {
             </div>
         {<MarketModal onOpen={() => console.log("onopen")} onClose={() => console.log("onclose")} marketTitle={"market title"} marketPrice={12} isOpen={marketModal}/>}
         {<CreateUserModal isOpen={false}/>}
-        {<MintTokenModal isOpen={true}/>}
+        {<MintMoneyModal isOpen={false}/>}
+        {<CreateMarketModal isOpen={false}/>}
         </div>
     )
 }

@@ -1,5 +1,5 @@
 export default function Card(props) {
-    console.log(props.cardTitle, props.cardsData, props.cardDescription)
+    
     return (
         <div className="h-[266px] w-[263px] rounded-lg px-[16px] pt-[25px]" style={{ backgroundColor: '#322E2E' }}>
             {props.cardTitle}
