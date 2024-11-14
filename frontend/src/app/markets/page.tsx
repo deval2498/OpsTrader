@@ -13,6 +13,9 @@ export default function MarketsPage() {
         { id: 3, title: 'Card 3', description: 'This is the third card.' },
       ];
     const [marketModal] = useState(false)
+    const handleOpenMarket = () => {
+
+    }
     return (
         <div className="text-white pt-[53px]">
             Available Markets
@@ -21,8 +24,7 @@ export default function MarketsPage() {
             <Card key={card.id} cardTitle={card.title} cardDescription={card.description}/>
       ))}
             </div>
-        {<MarketModal onOpen={() => console.log("onopen")} onClose={() => console.log("onclose")} marketTitle={"market title"} marketPrice={12} isOpen={marketModal}/>}
-        {<CreateUserModal isOpen={false}/>}
+        {<MarketModal onOpen={() => console.log("onopen")} onClose={() => console.log("onclose")} marketTitle={"market title"} marketType={"yes"} marketPrice={12} isOpen={marketModal}/>}
         {<MintMoneyModal isOpen={false}/>}
         {<CreateMarketModal isOpen={false}/>}
         </div>

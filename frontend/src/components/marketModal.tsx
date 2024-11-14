@@ -1,22 +1,28 @@
 "use client"
 import { useEffect } from "react"
 import Orderbook from "./orderbook"
+import { RootState } from "@/store/store"
+import { useDispatch, useSelector } from "react-redux"
+import { openLoginModal } from "@/store/slices/authSlice"
 interface MarketModalProps {
     marketTitle: string,
     marketPrice: number,
     onOpen: () => void,
     onClose: () => void,
-    isOpen: boolean
+    isOpen: boolean,
+    marketType: "yes" | "no"
 }
 
-export default function MarketModal({marketTitle, marketPrice, onOpen, onClose, isOpen} : MarketModalProps){
-    useEffect(() => {
-        if(isOpen) {
-            onOpen()
-        } else {
-            onClose()
-        }
-    }, [isOpen])
+export default function MarketModal({marketTitle, marketPrice, onOpen, onClose, isOpen, marketType} : MarketModalProps){
+
+    const dispatch = useDispatch();
+    const isLoggedIn = useSelector((state: RootState) => state.auth.isLoggedIn);
+
+    if (!isLoggedIn) {
+        dispatch(openLoginModal());
+        return null; 
+    }
+
     if(!isOpen) {
         return null
     }

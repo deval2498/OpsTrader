@@ -12,7 +12,7 @@ export default function Navbar() {
                 <button className="mr-5">
                     About
                 </button>
-                <button className="">
+                <button>
                     Login
                 </button>
                 </div>
